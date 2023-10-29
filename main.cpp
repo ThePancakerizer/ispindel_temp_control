@@ -4,8 +4,18 @@
 
 #include <iostream>
 #include <fstream>
-#include "parser.h"
+#include <boost/asio.hpp>
 
+#include "config_parser.h"
+#include "tcp_connection.h"
+#include "plug_adapter.h"
+
+#include "nlohmann/json.hpp"
+
+
+using namespace boost::asio;
+using ip::tcp;
+using nlohmann::json_abi_v3_11_2::json;
 
 int main(int argc, char* argv[])
 {
@@ -15,55 +25,24 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 	std::string configPath{argv[1]};
+	boost::asio::io_service io_service;
 	
+	// Program main loop
 	while(true) {
 		std::ifstream config{configPath};
+		if (!config.is_open()) {
+			std::cerr << "Error opening the config file." << std::endl;
+			return 1;
+		}
+		
 		std::vector<settings_parser::TempPair> pairs = settings_parser::parse(config);
+		config.close();
 		
+		std::string payload = tcp_connection::getData(io_service);
 		
-		
-		string ip = "localhost";
-		string port = "1234";
-		Socket *masterSocket = new Socket(AF_INET,SOCK_STREAM,0); //AF_INET (Internet mode) SOCK_STREAM (TCP mode) 0 (Protocol any)
-		int optVal = 1;
-		masterSocket->socket_set_opt(SOL_SOCKET, SO_REUSEADDR, &optVal); //You can reuse the address and the port
-		masterSocket->bind(ip, port); //Bind socket on localhost:1234
-		
-		masterSocket->listen(10); //Start listening for incoming connections (10 => maximum of 10 Connections in Queue)
-		
-		while (true) {
-			vector<Socket> reads(1);
-			reads[0] = *masterSocket;
-			int seconds = 10; //Wait 10 seconds for incoming Connections
-			if(Socket::select(&reads, NULL, NULL, seconds) < 1){ //Socket::select waits until masterSocket reveives some input (for example a new connection)
-				//No new Connection
-				continue;
-			}else{
-				//Something happens, let's accept the connection
-				break;
-			}
-		}
-		Socket *newSocket = masterSocket->accept(); //Accept the incoming connection and creates a new Socket to the client
-		
-		while (true) {
-			vector<Socket> reads(1);
-			reads[0] = *newSocket;
-			int seconds = 10; //Wait 10 seconds for input
-			if(Socket::select(&reads, NULL, NULL, seconds) < 1){ //Socket::select waits until masterSocket reveives some input (for example a message)
-				//No Input
-				continue;
-			}else{
-				string buffer;
-				newSocket->socket_read(buffer, 1024); //Read 1024 bytes of the stream
-				
-				newSocket->socket_write(buffer); //Sends the input back to the client (echo)
-			}
-		}
-		newSocket->socket_shutdown(2);
-		newSocket->close();
-		
-		masterSocket->socket_shutdown(2);
-		masterSocket->close();
+		json payload_json = json::parse(payload);
+		float goalTemp = settings_parser::calculateGoal(payload_json["gravity"], pairs);
+		plug_adapter::setWallPlug(payload_json["temp"], goalTemp, payload_json["interval"]);
 	}
 	
 	
